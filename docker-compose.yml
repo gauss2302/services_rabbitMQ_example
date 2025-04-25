@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: ${RABBITMQ_CONTAINER_NAME}
+    ports:
+      - "5672:5672"   # AMQP port
+      - "15672:15672" # Management UI port
+    healthcheck:
+      test: ["CMD", "rabbitmqctl", "status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS}
+      - RABBITMQ_DEFAULT_VHOST=${RABBITMQ_DEFAULT_VHOST}
+      - RABBITMQ_LOOPBACK_USERS=${RABBITMQ_LOOPBACK_USERS}
+    volumes:
+      - ${RABBITMQ_VOLUME_NAME}:/var/lib/rabbitmq
+    networks:
+      - ${DOCKER_NETWORK_NAME}
+
+  purchase-service:
+    build:
+      context: .
+      dockerfile: purchase-service/Dockerfile
+    container_name: ${PURCHASE_SERVICE_CONTAINER_NAME}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "${PURCHASE_SERVICE_PORT}:${PURCHASE_SERVICE_PORT}"
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - PORT=${PURCHASE_SERVICE_PORT}
+      - ORDER_EXCHANGE=${ORDER_EXCHANGE}
+      - ORDER_PLACED_QUEUE=${ORDER_PLACED_QUEUE}
+      - ORDER_STATUS_QUEUE=${ORDER_STATUS_QUEUE}
+      - ORDER_PLACED_ROUTING_KEY=${ORDER_PLACED_ROUTING_KEY}
+      - ORDER_STATUS_ROUTING_KEY=${ORDER_STATUS_ROUTING_KEY}
+    networks:
+      - ${DOCKER_NETWORK_NAME}
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${PURCHASE_SERVICE_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  warehouse-service:
+    build:
+      context: .
+      dockerfile: warehouse-service/Dockerfile
+    container_name: ${WAREHOUSE_SERVICE_CONTAINER_NAME}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    ports:
+      - "${WAREHOUSE_SERVICE_PORT}:${WAREHOUSE_SERVICE_PORT}"
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - PORT=${WAREHOUSE_SERVICE_PORT}
+      - ORDER_EXCHANGE=${ORDER_EXCHANGE}
+      - ORDER_PLACED_QUEUE=${ORDER_PLACED_QUEUE}
+      - ORDER_STATUS_QUEUE=${ORDER_STATUS_QUEUE}
+      - ORDER_PLACED_ROUTING_KEY=${ORDER_PLACED_ROUTING_KEY}
+      - ORDER_STATUS_ROUTING_KEY=${ORDER_STATUS_ROUTING_KEY}
+      - CONNECTION_RETRY_COUNT=${CONNECTION_RETRY_COUNT}
+      - CONNECTION_RETRY_INTERVAL=${CONNECTION_RETRY_INTERVAL}
+    networks:
+      - ${DOCKER_NETWORK_NAME}
+    restart: on-failure
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:${WAREHOUSE_SERVICE_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: api-gateway/Dockerfile
+    container_name: ${API_GATEWAY_CONTAINER_NAME}
+    depends_on:
+      purchase-service:
+        condition: service_healthy
+      warehouse-service:
+        condition: service_healthy
+    ports:
+      - "${API_GATEWAY_PORT}:${API_GATEWAY_PORT}"
+    environment:
+      - RABBITMQ_URL=${RABBITMQ_URL}
+      - PURCHASE_SERVICE_URL=${PURCHASE_SERVICE_URL}
+      - WAREHOUSE_SERVICE_URL=${WAREHOUSE_SERVICE_URL}
+      - PORT=${API_GATEWAY_PORT}
+      - ORDER_EXCHANGE=${ORDER_EXCHANGE}
+      - ORDER_PLACED_QUEUE=${ORDER_PLACED_QUEUE}
+      - ORDER_STATUS_QUEUE=${ORDER_STATUS_QUEUE}
+      - ORDER_PLACED_ROUTING_KEY=${ORDER_PLACED_ROUTING_KEY}
+      - ORDER_STATUS_ROUTING_KEY=${ORDER_STATUS_ROUTING_KEY}
+    networks:
+      - ${DOCKER_NETWORK_NAME}
+    restart: on-failure
+
+networks:
+  microservices-network:
+    name: ${DOCKER_NETWORK_NAME}
+    driver: bridge
+
+volumes:
+  rabbitmq_data:
+    name: ${RABBITMQ_VOLUME_NAME}
